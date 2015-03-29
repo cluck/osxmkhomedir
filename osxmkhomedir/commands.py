@@ -111,7 +111,7 @@ def check_secure(login_script):
     return isok
 
 
-def run(uid=None, firstRun=True):
+def run(uid, firstRun, revision):
     if 'SUDO_ASKPASS' in os.environ:
         del os.environ['SUDO_ASKPASS'] 
 
@@ -121,7 +121,8 @@ def run(uid=None, firstRun=True):
         try:
             conf = plistlib.readPlist(conf_file)
         except IOError:
-            conf = dict(firstRun=True)
+            conf = dict(firstRun=True, revision=revision)
+        userRevision = int(conf.get('revision', 1))
         conf['firstRun'] |= firstRun
         pw_user = pwd.getpwuid(os.getuid())
         #
@@ -139,7 +140,7 @@ def run(uid=None, firstRun=True):
         if conf['firstRun']:
             login_script = '/usr/local/Library/osxmkhomedir/login-first.sh'
             if check_secure(login_script):
-                child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
+                child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir, str(userRevision)], env=os.environ,
                     stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
                 print(child.communicate()[0].rstrip('\n'))
             else:
@@ -148,13 +149,14 @@ def run(uid=None, firstRun=True):
         login_script = '/usr/local/Library/osxmkhomedir/login.sh'
         if check_secure(login_script):
             check_secure(login_script)
-            child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
+            child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir, str(userRevision)], env=os.environ,
                 stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
             print(child.communicate()[0].rstrip('\n'))
         else:
             print(' Skipped: {0}'.format(login_script))
         #
         conf['firstRun'] = False
+        conf['revision'] = userRevision
         plistlib.writePlist(conf, conf_file)
     else:
         if uid is None:
@@ -164,7 +166,7 @@ def run(uid=None, firstRun=True):
         if firstRun:
             login_script = '/usr/local/Library/osxmkhomedir/login-privileged-first.sh'
             if check_secure(login_script):
-                child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
+                child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir, str(userRevision)], env=os.environ,
                     stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
                 print(child.communicate()[0].rstrip('\n'))
             else:
@@ -173,7 +175,7 @@ def run(uid=None, firstRun=True):
         login_script = '/usr/local/Library/osxmkhomedir/login-privileged.sh'
         if check_secure(login_script):
             check_secure(login_script)
-            child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
+            child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir, str(userRevision)], env=os.environ,
                 stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
             print(child.communicate()[0].rstrip('\n'))
         else:
@@ -182,23 +184,26 @@ def run(uid=None, firstRun=True):
 
 def main(argv):
     try:
-        opts, args = getopt.getopt(argv, "", ["install", "run", "uid=", "first"])
-    except getopt.GetoptError:
+        opts, args = getopt.getopt(argv, "hfu:r:", ["help", "install", "run", "uid=", "first", "revision="])
+    except getopt.GetoptError as e:
         return usage(2)
     uid = None
     firstRun = False
+    revision = 1
     for opt, arg in opts:
-        if opt in ('--uid'):
+        if opt in ('-u', '--uid'):
             uid = int(arg)
-        if opt in ('--first'):
+        elif opt in ('-f', '--first'):
             firstRun = True
+        elif opt in ('-r', '--revision'):
+            revision = int(arg)
     for opt, arg in opts:
         if opt in ('-h', '--help'):
             return usage()
         elif opt in ('-i', '--install'):
             return install()
         elif opt in ('-r', '--run'):
-            return run(uid=uid, firstRun=firstRun)
+            return run(uid=uid, firstRun=firstRun, revision=revision)
     return usage(1)
 
 
