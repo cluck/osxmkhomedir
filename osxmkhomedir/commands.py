@@ -1,17 +1,21 @@
 #! -*- coding: utf-8 -*-
 
-__version__ = '1.1.0'
+from __future__ import unicode_literals
+
+__version__ = '2.1.0'
 __author__ = 'Claudio Luck'
 __author_email__ = 'claudio.luck@gmail.com'
 
 import sys
 import os
-import getopt
 import codecs
-import subprocess
-import shutil
+import getopt
+import glob
 import grp
+import plistlib
 import pwd
+import shutil
+import subprocess
 
 cmd = os.path.abspath(sys.argv[0])
 base = os.path.basename(cmd)
@@ -20,7 +24,7 @@ if base != 'osxmkhomedir' and __name__ != "__main__":
 
 
 def install():
-    template = """\
+    template = u"""\
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -28,7 +32,7 @@ def install():
     <key>Disabled</key>
     <false/>
     <key>Label</key>
-    <string>OS X mkhomedir</string>
+    <string>osxmkhomedir</string>
     <key>Program</key>
     <string>{cmd:s}</string>
     <key>ProgramArguments</key>
@@ -59,7 +63,7 @@ def install():
         with codecs.open('/etc/sudoers', 'r') as origf:
             sudoers = origf.read()
             if line in sudoers:
-                print('Already installed /etc/sudoers')
+                print('Already installed in /etc/sudoers')
                 return
             tmpf.write(sudoers)
         tmpf.write(line + '\n')
@@ -111,99 +115,136 @@ def check_secure(login_script):
     return isok
 
 
-def run(uid, firstRun, revision):
+def get_revisions():
+    max = 1
+    rn = 0
+    scripts = dict()
+    revs = glob.iglob('/usr/local/Library/osxmkhomedir/upgrade[0-9]*.sh')
+    for r in revs:
+        try:
+            rn = int(os.path.splitext(os.path.basename(r))[0].split('-', 1)[0][7:])
+        except ValueError as e:
+            print("{0}: {1} ({2})".format(type(e).__name__, str(e), r))
+        scripts.setdefault(rn, ['upgrade{0:d}.sh'.format(rn), 'upgrade{0:d}-privileged.sh'.format(rn)])
+        scripts[rn][int(r.endswith('-privileged.sh'))] = os.path.basename(r)
+        if rn > max:
+            max = rn
+    for rn in range(1, max+1):
+        if rn not in scripts:
+            scripts[rn] = ['upgrade{0:d}.sh'.format(rn), 'upgrade{0:d}-privileged.sh'.format(rn)]
+    return max, scripts
+
+
+def run(uid, revision, login):
+
     if 'SUDO_ASKPASS' in os.environ:
         del os.environ['SUDO_ASKPASS'] 
 
+    script_errors = 0
+
     if os.getuid() != 0:
-        import plistlib
         conf_file = os.path.expanduser('~/Library/Preferences/ch.cluck.osxmkhomedir.plist')
         try:
             conf = plistlib.readPlist(conf_file)
         except IOError:
-            conf = dict(firstRun=True, revision=revision)
-        userRevision = int(conf.get('revision', 1))
-        conf['firstRun'] |= firstRun
+            conf = dict(revision=0)
+        userRevision = int(conf.get('revision', 0))
+        updatedRevision = userRevision
         pw_user = pwd.getpwuid(os.getuid())
+        max_revision, scripts = get_revisions()
         #
         if check_secure(cmd):
-            env=os.environ.copy()
-            sudo_cmd = ['/usr/bin/sudo', cmd, '--run', '--uid', str(os.getuid())]
-            if conf['firstRun']:
-                sudo_cmd.append('--first')
+            for rev in range(userRevision+1, max_revision+1):
+                upgrade_script = os.path.join('/usr/local/Library/osxmkhomedir', scripts[rev][0])
+                sudo_cmd = ['/usr/bin/sudo', '-n', cmd, '--run', '--uid', str(os.getuid()),
+                    '--revision', scripts[rev][1]]
+                child = subprocess.Popen(sudo_cmd, env=os.environ,
+                    stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
+                print(child.communicate()[0].rstrip('\n'))
+                script_errors |= child.returncode
+                #
+                if script_errors != 0:
+                    print(' Skipped: {0}'.format(upgrade_script))
+                elif check_secure(upgrade_script):
+                    child = subprocess.Popen([upgrade_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
+                        stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
+                    print(child.communicate()[0].rstrip('\n'))
+                    script_errors |= child.returncode
+                if script_errors == 0:
+                    updatedRevision = rev
+                else:
+                    print(' Interruping due to error')
+                    conf['revision'] = updatedRevision
+                    plistlib.writePlist(conf, conf_file)
+                    return script_errors
+            # root login
+            sudo_cmd = ['/usr/bin/sudo', '-n', cmd, '--run', '--uid', str(os.getuid()), '--login']
             child = subprocess.Popen(sudo_cmd, env=os.environ,
                 stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
             print(child.communicate()[0].rstrip('\n'))
-        else:
-            print(' Skipped: {0}'.format(cmd))
-        #
-        if conf['firstRun']:
-            login_script = '/usr/local/Library/osxmkhomedir/login-first.sh'
-            if check_secure(login_script):
-                child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir, str(userRevision)], env=os.environ,
-                    stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-                print(child.communicate()[0].rstrip('\n'))
-            else:
-                print(' Skipped: {0}'.format(login_script))
+            script_errors |= child.returncode
+            if script_errors != 0:
+                print(' Interruping due to error')
+                conf['revision'] = updatedRevision
+                plistlib.writePlist(conf, conf_file)
+                return script_errors
         #
         login_script = '/usr/local/Library/osxmkhomedir/login.sh'
         if check_secure(login_script):
-            check_secure(login_script)
-            child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir, str(userRevision)], env=os.environ,
+            child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
                 stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
             print(child.communicate()[0].rstrip('\n'))
-        else:
-            print(' Skipped: {0}'.format(login_script))
+            script_errors |= child.returncode
         #
-        conf['firstRun'] = False
-        conf['revision'] = userRevision
-        plistlib.writePlist(conf, conf_file)
+        if script_errors == 0: 
+            conf['revision'] = updatedRevision
+            plistlib.writePlist(conf, conf_file)
     else:
         if uid is None:
-            raise RuntimeError('Missing: --uid=<uid>')
+            raise RuntimeError('Calling arguments error')
         pw_user = pwd.getpwuid(uid)
         #
-        if firstRun:
-            login_script = '/usr/local/Library/osxmkhomedir/login-privileged-first.sh'
-            if check_secure(login_script):
-                child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir, str(userRevision)], env=os.environ,
+        if revision and revision.endswith('-privileged.sh'):
+            upgrade_script = os.path.join('/usr/local/Library/osxmkhomedir', revision)
+            if check_secure(upgrade_script):
+                child = subprocess.Popen([upgrade_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
                     stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
                 print(child.communicate()[0].rstrip('\n'))
-            else:
-                print(' Skipped: {0}'.format(login_script))
+                script_errors |= child.returncode
         #
-        login_script = '/usr/local/Library/osxmkhomedir/login-privileged.sh'
-        if check_secure(login_script):
-            check_secure(login_script)
-            child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir, str(userRevision)], env=os.environ,
-                stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-            print(child.communicate()[0].rstrip('\n'))
-        else:
-            print(' Skipped: {0}'.format(login_script))
+        if script_errors == 0 and login == True:
+            login_script = '/usr/local/Library/osxmkhomedir/login-privileged.sh'
+            if check_secure(login_script):
+                check_secure(login_script)
+                child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
+                    stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
+                print(child.communicate()[0].rstrip('\n'))
+                script_errors |= child.returncode
+    return script_errors
 
 
 def main(argv):
     try:
-        opts, args = getopt.getopt(argv, "hfu:r:", ["help", "install", "run", "uid=", "first", "revision="])
+        opts, args = getopt.getopt(argv, "hiu:r:", ["help", "install", "run", "uid=", "revision=", "login"])
     except getopt.GetoptError as e:
         return usage(2)
     uid = None
-    firstRun = False
-    revision = 1
+    revision = None
+    login = False
     for opt, arg in opts:
         if opt in ('-u', '--uid'):
             uid = int(arg)
-        elif opt in ('-f', '--first'):
-            firstRun = True
         elif opt in ('-r', '--revision'):
-            revision = int(arg)
+            revision = arg
+        elif opt in ('--login'):
+            login = True
     for opt, arg in opts:
         if opt in ('-h', '--help'):
             return usage()
         elif opt in ('-i', '--install'):
             return install()
         elif opt in ('-r', '--run'):
-            return run(uid=uid, firstRun=firstRun, revision=revision)
+            return run(uid=uid, revision=revision, login=login)
     return usage(1)
 
 
