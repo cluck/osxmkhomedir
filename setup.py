@@ -61,6 +61,7 @@ setup(
     entry_points={
         'console_scripts': [
             'osxmkhomedir = osxmkhomedir.commands:command',
+            'osxmkhomedir-hook = osxmkhomedir.commands:login_hook',
         ],
     },
     classifiers=[

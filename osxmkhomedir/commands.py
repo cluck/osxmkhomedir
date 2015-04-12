@@ -2,7 +2,7 @@
 
 from __future__ import unicode_literals
 
-__version__ = '2.1.0'
+__version__ = '2.2.0'
 __author__ = 'Claudio Luck'
 __author_email__ = 'claudio.luck@gmail.com'
 
@@ -19,7 +19,7 @@ import subprocess
 
 cmd = os.path.abspath(sys.argv[0])
 base = os.path.basename(cmd)
-if base != 'osxmkhomedir' and __name__ != "__main__":
+if base not in ('osxmkhomedir', 'osxmkhomedir-hook') and __name__ != "__main__":
     raise RuntimeError('binary should be called osxmkhomedir, not ' + base)
 
 
@@ -51,11 +51,23 @@ def install():
 </plist>
 """
     plist_file = '/Library/LaunchAgents/{base:s}.plist'.format(base=base)
-    with codecs.open(plist_file, 'w', 'utf-8') as plist:
-        plist.write(template.format(cmd=cmd, base=base))
-    os.chmod(plist_file, 0644)
-    os.chown(plist_file, 0, 0) 
-    print('Written {0}'.format(plist_file))
+    #with codecs.open(plist_file, 'w', 'utf-8') as plist:
+    #    plist.write(template.format(cmd=cmd, base=base))
+    #os.chmod(plist_file, 0644)
+    #os.chown(plist_file, 0, 0) 
+    #print('Written {0}'.format(plist_file))
+    #child = subprocess.Popen(['launchctl', 'unload', 'osxmkhomedir'],
+    #    stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+    #child.communicate()
+    try:
+        os.unlink(plist_file)
+        print('Removed obsolete {0}'.format(plist_file))
+    except OSError:
+        pass
+    child = subprocess.Popen(['defaults', 'write', 'com.apple.loginwindow',
+        'LoginHook', '/usr/local/bin/osxmkhomedir-hook'],
+        stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+    child.communicate()
 
     # Check/edit /etc/sudoers
     line = '\nALL ALL=(root) NOPASSWD: {cmd:s} --run\n'.format(cmd=cmd)
@@ -215,7 +227,6 @@ def run(uid, revision, login):
         if script_errors == 0 and login == True:
             login_script = '/usr/local/Library/osxmkhomedir/login-privileged.sh'
             if check_secure(login_script):
-                check_secure(login_script)
                 child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
                     stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
                 print(child.communicate()[0].rstrip('\n'))
@@ -246,6 +257,22 @@ def main(argv):
         elif opt in ('-r', '--run'):
             return run(uid=uid, revision=revision, login=login)
     return usage(1)
+
+
+def login_hook():
+    # called as root, only argument should be the username for which it is running
+    try:
+        user = sys.argv[1]
+        uid = pwd.getpwnam(user).pw_uid
+    except:
+        print('Usage: osmkhomedir-hook <username>')
+        sys.exit(1)
+    login_script = '/usr/local/bin/osxmkhomedir'
+    if check_secure(login_script):
+        # os.seteuid(uid)
+        child = subprocess.Popen(['/usr/bin/sudo', '-n', '-u', user, login_script, '--run'],
+            env={}, stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
+        print(child.communicate()[0].rstrip('\n'))
 
 
 def command():
