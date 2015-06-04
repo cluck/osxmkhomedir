@@ -2,7 +2,7 @@
 
 from __future__ import unicode_literals
 
-__version__ = '2.2.0'
+__version__ = '2.4.0'
 __author__ = 'Claudio Luck'
 __author_email__ = 'claudio.luck@gmail.com'
 
@@ -70,23 +70,38 @@ def install():
     child.communicate()
 
     # Check/edit /etc/sudoers
-    line = '\nALL ALL=(root) NOPASSWD: {cmd:s} --run\n'.format(cmd=cmd)
+    lines = (
+        '\nALL ALL=(ALL) NOPASSWD: {cmd:s} --run\n'.format(cmd=cmd),
+        # lines to be replaced with the above:
+        '\nALL ALL=(root) NOPASSWD: {cmd:s} --run\n'.format(cmd=cmd),
+    )
     with open('/etc/sudoers.tmp', 'w', os.O_EXCL) as tmpf:
         with codecs.open('/etc/sudoers', 'r') as origf:
-            sudoers = origf.read()
-            if line in sudoers:
+            sudoers0 = sudoers = origf.read()
+            for line in lines[1:]:
+               if lines[0] not in sudoers:
+                   sudoers = sudoers.replace(line, lines[0])
+               else:
+                   sudoers = sudoers.replace(line, '\n# ' + line.lstrip('\n'))
+            if lines[0] not in sudoers:
+                sudoers += lines[0] + '\n'
+            if sudoers == sudoers0:
                 print('Already installed in /etc/sudoers')
                 return
             tmpf.write(sudoers)
-        tmpf.write(line + '\n')
         child = subprocess.Popen(['visudo', '-c', '-f', '/etc/sudoers.tmp'],
             stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-        child.communicate()
+        visudo = child.communicate()
         if not child.returncode:
             shutil.move('/etc/sudoers.tmp', '/etc/sudoers')
             os.chmod('/etc/sudoers', 0440)
             os.chown('/etc/sudoers', 0, 0)
-        print('Written /etc/sudoers')
+            print('Written /etc/sudoers')
+        else:
+            print(sudoers)
+            print(''.join(visudo))
+            print('ERROR writing /etc/sudoers')
+            return 1
 
 
 def usage(ret=0):
