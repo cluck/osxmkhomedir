@@ -1,8 +1,8 @@
-#! -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 from __future__ import unicode_literals
 
-__version__ = '2.4.0'
+__version__ = '3.1.0'
 __author__ = 'Claudio Luck'
 __author_email__ = 'claudio.luck@gmail.com'
 
@@ -15,6 +15,7 @@ import grp
 import plistlib
 import pwd
 import shutil
+import select
 import subprocess
 
 cmd = os.path.abspath(sys.argv[0])
@@ -23,7 +24,38 @@ if base not in ('osxmkhomedir', 'osxmkhomedir-hook') and __name__ != "__main__":
     raise RuntimeError('binary should be called osxmkhomedir, not ' + base)
 
 
-def install():
+def print_communicate(p, buffer=False):
+
+    stdout = []
+    stderr = []
+
+    while True:
+        readfh = [p.stdout.fileno(), p.stderr.fileno()]
+        selfh = select.select(readfh, [], [])
+
+        for fd in selfh[0]:
+            if fd == p.stdout.fileno():
+                indata = p.stdout.readline()
+                sys.stdout.write(indata)
+                if buffer:
+                    stdout.append(indata)
+            if fd == p.stderr.fileno():
+                indata = p.stderr.readline()
+                sys.stderr.write(indata)
+                if buffer:
+                    stderr.append(indata)
+
+        if p.poll() != None:
+            break
+
+    stdout = ''.join(stdout)
+    stderr = ''.join(stderr)
+
+    return stdout, stderr
+
+
+
+def install(debug=False):
     template = u"""\
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -67,12 +99,13 @@ def install():
     child = subprocess.Popen(['defaults', 'write', 'com.apple.loginwindow',
         'LoginHook', '/usr/local/bin/osxmkhomedir-hook'],
         stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    child.communicate()
+    print_communicate(child)
 
     # Check/edit /etc/sudoers
     lines = (
-        '\nALL ALL=(ALL) NOPASSWD: {cmd:s} --run\n'.format(cmd=cmd),
+        '\nALL ALL=(ALL) NOPASSWD: {cmd:s} --run*\n'.format(cmd=cmd),
         # lines to be replaced with the above:
+        '\nALL ALL=(ALL) NOPASSWD: {cmd:s} --run\n'.format(cmd=cmd),
         '\nALL ALL=(root) NOPASSWD: {cmd:s} --run\n'.format(cmd=cmd),
     )
     with open('/etc/sudoers.tmp', 'w', os.O_EXCL) as tmpf:
@@ -91,15 +124,13 @@ def install():
             tmpf.write(sudoers)
         child = subprocess.Popen(['visudo', '-c', '-f', '/etc/sudoers.tmp'],
             stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-        visudo = child.communicate()
+        print_communicate(child)
         if not child.returncode:
             shutil.move('/etc/sudoers.tmp', '/etc/sudoers')
             os.chmod('/etc/sudoers', 0440)
             os.chown('/etc/sudoers', 0, 0)
             print('Written /etc/sudoers')
         else:
-            print(sudoers)
-            print(''.join(visudo))
             print('ERROR writing /etc/sudoers')
             return 1
 
@@ -111,8 +142,11 @@ def usage(ret=0):
 
 def check_secure(login_script):
     isok = True
-    if not os.path.isfile(login_script):
+    if not os.path.exists(login_script):
         print('Does not exist: {0}'.format(login_script))
+        return None
+    if not os.path.isfile(login_script):
+        print('Is not a regular file: {0}'.format(login_script))
         return False
     if not os.access(login_script, os.X_OK):
         print('Not executable: {0}'.format(login_script))
@@ -151,7 +185,8 @@ def get_revisions():
         try:
             rn = int(os.path.splitext(os.path.basename(r))[0].split('-', 1)[0][7:])
         except ValueError as e:
-            print("{0}: {1} ({2})".format(type(e).__name__, str(e), r))
+            sys.stderr.write("{0}: {1} ({2})\n".format(type(e).__name__, str(e), r))
+            raise SystemExit(1)
         scripts.setdefault(rn, ['upgrade{0:d}.sh'.format(rn), 'upgrade{0:d}-privileged.sh'.format(rn)])
         scripts[rn][int(r.endswith('-privileged.sh'))] = os.path.basename(r)
         if rn > max:
@@ -162,7 +197,7 @@ def get_revisions():
     return max, scripts
 
 
-def run(uid, revision, login):
+def run(uid, revision, login, debug=False):
 
     if 'SUDO_ASKPASS' in os.environ:
         del os.environ['SUDO_ASKPASS'] 
@@ -186,32 +221,32 @@ def run(uid, revision, login):
                 sudo_cmd = ['/usr/bin/sudo', '-n', cmd, '--run', '--uid', str(os.getuid()),
                     '--revision', scripts[rev][1]]
                 child = subprocess.Popen(sudo_cmd, env=os.environ,
-                    stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-                print(child.communicate()[0].rstrip('\n'))
+                    stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+                print_communicate(child)
                 script_errors |= child.returncode
                 #
                 if script_errors != 0:
                     print(' Skipped: {0}'.format(upgrade_script))
                 elif check_secure(upgrade_script):
                     child = subprocess.Popen([upgrade_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
-                        stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-                    print(child.communicate()[0].rstrip('\n'))
+                        stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+                    print_communicate(child)
                     script_errors |= child.returncode
                 if script_errors == 0:
                     updatedRevision = rev
                 else:
-                    print(' Interruping due to error')
+                    print('Upgrade scripts failed due to errors ({0})'.format(script_errors))
                     conf['revision'] = updatedRevision
                     plistlib.writePlist(conf, conf_file)
                     return script_errors
             # root login
             sudo_cmd = ['/usr/bin/sudo', '-n', cmd, '--run', '--uid', str(os.getuid()), '--login']
             child = subprocess.Popen(sudo_cmd, env=os.environ,
-                stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-            print(child.communicate()[0].rstrip('\n'))
+                stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+            print_communicate(child)
             script_errors |= child.returncode
             if script_errors != 0:
-                print(' Interruping due to error')
+                print('Login scripts failed due to errors ({0})'.format(script_errors))
                 conf['revision'] = updatedRevision
                 plistlib.writePlist(conf, conf_file)
                 return script_errors
@@ -219,11 +254,11 @@ def run(uid, revision, login):
         login_script = '/usr/local/Library/osxmkhomedir/login.sh'
         if check_secure(login_script):
             child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
-                stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-            print(child.communicate()[0].rstrip('\n'))
+                stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+            print_communicate(child)
             script_errors |= child.returncode
         #
-        if script_errors == 0: 
+        if script_errors == 0:
             conf['revision'] = updatedRevision
             plistlib.writePlist(conf, conf_file)
     else:
@@ -232,31 +267,37 @@ def run(uid, revision, login):
         pw_user = pwd.getpwuid(uid)
         #
         if revision and revision.endswith('-privileged.sh'):
+            revision = os.path.basename(revision)
             upgrade_script = os.path.join('/usr/local/Library/osxmkhomedir', revision)
-            if check_secure(upgrade_script):
+            safety_check = check_secure(upgrade_script)
+            if safety_check:
                 child = subprocess.Popen([upgrade_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
-                    stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-                print(child.communicate()[0].rstrip('\n'))
+                    stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+                print_communicate(child)
                 script_errors |= child.returncode
+            elif safety_check == False:
+                script_errors |= 1
         #
         if script_errors == 0 and login == True:
             login_script = '/usr/local/Library/osxmkhomedir/login-privileged.sh'
             if check_secure(login_script):
                 child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
-                    stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-                print(child.communicate()[0].rstrip('\n'))
+                    stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+                print_communicate(child)
                 script_errors |= child.returncode
     return script_errors
 
 
 def main(argv):
     try:
-        opts, args = getopt.getopt(argv, "hiu:r:", ["help", "install", "run", "uid=", "revision=", "login"])
+        opts, args = getopt.getopt(argv, "hiu:r:d", ["debug", "help", "install", "run",
+                                                     "uid=", "revision=", "login"])
     except getopt.GetoptError as e:
         return usage(2)
     uid = None
     revision = None
     login = False
+    debug = False
     for opt, arg in opts:
         if opt in ('-u', '--uid'):
             uid = int(arg)
@@ -264,13 +305,15 @@ def main(argv):
             revision = arg
         elif opt in ('--login'):
             login = True
+        if opt in ('-d', '--debug'):
+            debug = True
     for opt, arg in opts:
         if opt in ('-h', '--help'):
             return usage()
         elif opt in ('-i', '--install'):
-            return install()
+            return install(debug=debug)
         elif opt in ('-r', '--run'):
-            return run(uid=uid, revision=revision, login=login)
+            return run(uid=uid, revision=revision, login=login, debug=debug)
     return usage(1)
 
 
@@ -286,8 +329,8 @@ def login_hook():
     if check_secure(login_script):
         # os.seteuid(uid)
         child = subprocess.Popen(['/usr/bin/sudo', '-n', '-u', user, login_script, '--run'],
-            env={}, stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
-        print(child.communicate()[0].rstrip('\n'))
+            env={}, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+        print_communicate(child)
 
 
 def command():
