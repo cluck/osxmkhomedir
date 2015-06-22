@@ -121,7 +121,7 @@ def check_secure(login_script):
     if login_script_stat.st_uid:
         print('Insecure script owner: {0}'.format(login_script))
         isok = False
-    if grp.getgrgid(login_script_stat.st_gid).gr_name not in ('root', 'admin'):
+    if grp.getgrgid(login_script_stat.st_gid).gr_name not in ('root', 'admin', 'wheel'):
         print('Insecure script group: {0}'.format(login_script))
         isok = False
     if (login_script_stat.st_mode & 0777) & ~0775:
@@ -133,7 +133,7 @@ def check_secure(login_script):
     if login_dir_stat.st_uid:
         print('Insecure dir owner: {0}'.format(login_dir))
         isok = False
-    if grp.getgrgid(login_dir_stat.st_gid).gr_name not in ('root', 'admin'):
+    if grp.getgrgid(login_dir_stat.st_gid).gr_name not in ('root', 'admin', 'wheel'):
         print('Insecure dir group: {0}'.format(login_dir))
         isok = False
     if (login_dir_stat.st_mode & 0777) & ~0775:
