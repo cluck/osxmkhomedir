@@ -8,14 +8,14 @@ __author_email__ = 'claudio.luck@gmail.com'
 
 import sys
 import os
-import codecs
+import fcntl
 import getopt
 import glob
 import grp
 import plistlib
 import pwd
-import shutil
 import select
+import shutil
 import subprocess
 
 cmd = os.path.abspath(sys.argv[0])
@@ -24,7 +24,7 @@ if base not in ('osxmkhomedir', 'osxmkhomedir-hook') and __name__ != "__main__":
     raise RuntimeError('binary should be called osxmkhomedir, not ' + base)
 
 
-def print_communicate(p, buffer=False):
+def print_communicate(p, buffer=False, verbose=True):
 
     stdout = []
     stderr = []
@@ -36,7 +36,8 @@ def print_communicate(p, buffer=False):
         for fd in selfh[0]:
             if fd == p.stdout.fileno():
                 indata = p.stdout.readline()
-                sys.stdout.write(indata)
+                if verbose:
+                    sys.stdout.write(indata)
                 if buffer:
                     stdout.append(indata)
             if fd == p.stderr.fileno():
@@ -99,7 +100,7 @@ def install(debug=False):
     child = subprocess.Popen(['defaults', 'write', 'com.apple.loginwindow',
         'LoginHook', '/usr/local/bin/osxmkhomedir-hook'],
         stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    print_communicate(child)
+    print_communicate(child, verbose=debug)
 
     # Check/edit /etc/sudoers
     lines = (
@@ -108,30 +109,37 @@ def install(debug=False):
         '\nALL ALL=(ALL) NOPASSWD: {cmd:s} --run\n'.format(cmd=cmd),
         '\nALL ALL=(root) NOPASSWD: {cmd:s} --run\n'.format(cmd=cmd),
     )
-    with open('/etc/sudoers.tmp', 'w', os.O_EXCL) as tmpf:
-        with codecs.open('/etc/sudoers', 'r') as origf:
-            sudoers0 = sudoers = origf.read()
-            for line in lines[1:]:
-               if lines[0] not in sudoers:
-                   sudoers = sudoers.replace(line, lines[0])
-               else:
-                   sudoers = sudoers.replace(line, '\n# ' + line.lstrip('\n'))
-            if lines[0] not in sudoers:
-                sudoers += lines[0] + '\n'
-            if sudoers == sudoers0:
-                print('Already installed in /etc/sudoers')
-                return
+    fopts = os.O_EXCL | getattr(os, 'O_EXLOCK', 0)
+    with open('/etc/sudoers', 'r', os.O_RDWR | fopts) as origf:
+        try:
+            fcntl.flock(origf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except IOError:
+            print('osxmkhomedir: /etc/sudoers busy, try again later')
+            return 1
+        sudoers0 = sudoers = origf.read()
+        for line in lines[1:]:
+           if lines[0] not in sudoers:
+               sudoers = sudoers.replace(line, lines[0])
+           else:
+               sudoers = sudoers.replace(line, '\n# ' + line.lstrip('\n'))
+        if lines[0] not in sudoers:
+            sudoers += lines[0] + '\n'
+        if sudoers == sudoers0:
+            print('Already installed in /etc/sudoers')
+            return
+        with open('/etc/sudoers.tmp', 'w', fopts) as tmpf:        
             tmpf.write(sudoers)
         child = subprocess.Popen(['visudo', '-c', '-f', '/etc/sudoers.tmp'],
             stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-        print_communicate(child)
+        print_communicate(child, verbose=debug)
         if not child.returncode:
             shutil.move('/etc/sudoers.tmp', '/etc/sudoers')
             os.chmod('/etc/sudoers', 0440)
             os.chown('/etc/sudoers', 0, 0)
             print('Written /etc/sudoers')
         else:
-            print('ERROR writing /etc/sudoers')
+            print('Error building /etc/sudoers, not installed')
+            os.unlink('/etc/sudoers.tmp')
             return 1
 
 
@@ -222,7 +230,7 @@ def run(uid, revision, login, debug=False):
                     '--revision', scripts[rev][1]]
                 child = subprocess.Popen(sudo_cmd, env=os.environ,
                     stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-                print_communicate(child)
+                print_communicate(child, verbose=debug)
                 script_errors |= child.returncode
                 #
                 if script_errors != 0:
@@ -230,7 +238,7 @@ def run(uid, revision, login, debug=False):
                 elif check_secure(upgrade_script):
                     child = subprocess.Popen([upgrade_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
                         stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-                    print_communicate(child)
+                    print_communicate(child, verbose=debug)
                     script_errors |= child.returncode
                 if script_errors == 0:
                     updatedRevision = rev
@@ -243,7 +251,7 @@ def run(uid, revision, login, debug=False):
             sudo_cmd = ['/usr/bin/sudo', '-n', cmd, '--run', '--uid', str(os.getuid()), '--login']
             child = subprocess.Popen(sudo_cmd, env=os.environ,
                 stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-            print_communicate(child)
+            print_communicate(child, verbose=debug)
             script_errors |= child.returncode
             if script_errors != 0:
                 print('Login scripts failed due to errors ({0})'.format(script_errors))
@@ -255,7 +263,7 @@ def run(uid, revision, login, debug=False):
         if check_secure(login_script):
             child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
                 stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-            print_communicate(child)
+            print_communicate(child, verbose=debug)
             script_errors |= child.returncode
         #
         if script_errors == 0:
@@ -273,7 +281,7 @@ def run(uid, revision, login, debug=False):
             if safety_check:
                 child = subprocess.Popen([upgrade_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
                     stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-                print_communicate(child)
+                print_communicate(child, verbose=debug)
                 script_errors |= child.returncode
             elif safety_check == False:
                 script_errors |= 1
@@ -283,7 +291,7 @@ def run(uid, revision, login, debug=False):
             if check_secure(login_script):
                 child = subprocess.Popen([login_script, pw_user.pw_name, pw_user.pw_dir], env=os.environ,
                     stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-                print_communicate(child)
+                print_communicate(child, verbose=debug)
                 script_errors |= child.returncode
     return script_errors
 
@@ -330,7 +338,7 @@ def login_hook():
         # os.seteuid(uid)
         child = subprocess.Popen(['/usr/bin/sudo', '-n', '-u', user, login_script, '--run'],
             env={}, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-        print_communicate(child)
+        print_communicate(child, verbose=True)
 
 
 def command():
