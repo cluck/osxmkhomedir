@@ -2,7 +2,7 @@
 
 from __future__ import unicode_literals
 
-__version__ = '3.1.0'
+__version__ = '3.2.0'
 __author__ = 'Claudio Luck'
 __author_email__ = 'claudio.luck@gmail.com'
 
@@ -185,7 +185,7 @@ def check_secure(login_script):
 
 
 def get_revisions():
-    max = 1
+    max_ = 1
     rn = 0
     scripts = dict()
     revs = glob.iglob('/usr/local/Library/osxmkhomedir/upgrade[0-9]*.sh')
@@ -197,12 +197,12 @@ def get_revisions():
             raise SystemExit(1)
         scripts.setdefault(rn, ['upgrade{0:d}.sh'.format(rn), 'upgrade{0:d}-privileged.sh'.format(rn)])
         scripts[rn][int(r.endswith('-privileged.sh'))] = os.path.basename(r)
-        if rn > max:
-            max = rn
-    for rn in range(1, max+1):
+        if rn > max_:
+            max_ = rn
+    for rn in range(1, max_+1):
         if rn not in scripts:
             scripts[rn] = ['upgrade{0:d}.sh'.format(rn), 'upgrade{0:d}-privileged.sh'.format(rn)]
-    return max, scripts
+    return max_, scripts
 
 
 def run(uid, revision, login, debug=False):
