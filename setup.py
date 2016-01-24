@@ -58,6 +58,7 @@ setup(
     #include_package_data=True,
     platforms=["any"],
     #package_dir=PACKAGE_DIR,
+    requires=['argparse'],
     entry_points={
         'console_scripts': [
             'osxmkhomedir = osxmkhomedir.commands:command',

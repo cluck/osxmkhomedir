@@ -2,7 +2,7 @@
 
 from __future__ import unicode_literals
 
-__version__ = '3.2.0'
+__version__ = '3.3.0'
 __author__ = 'Claudio Luck'
 __author_email__ = 'claudio.luck@gmail.com'
 
@@ -161,8 +161,10 @@ def check_secure(login_script):
         isok = False
     login_script_stat = os.stat(login_script)
     if login_script_stat.st_uid:
-        print('Insecure script owner: {0}'.format(login_script))
-        isok = False
+        name = pwd.getpwuid(login_script_stat.st_uid).pw_name
+        if (name not in grp.getgrnam('admin').gr_mem):
+            print('Insecure script owner: {0}'.format(login_script))
+            isok = False
     if grp.getgrgid(login_script_stat.st_gid).gr_name not in ('root', 'admin', 'wheel'):
         print('Insecure script group: {0}'.format(login_script))
         isok = False
@@ -173,8 +175,10 @@ def check_secure(login_script):
     login_dir = os.path.dirname(login_script)
     login_dir_stat = os.stat(login_dir)
     if login_dir_stat.st_uid:
-        print('Insecure dir owner: {0}'.format(login_dir))
-        isok = False
+        name = pwd.getpwuid(login_dir_stat.st_uid).pw_name
+        if (name not in grp.getgrnam('admin').gr_mem):
+            print('Insecure dir owner: {0}'.format(login_dir))
+            isok = False
     if grp.getgrgid(login_dir_stat.st_gid).gr_name not in ('root', 'admin', 'wheel'):
         print('Insecure dir group: {0}'.format(login_dir))
         isok = False
@@ -297,32 +301,33 @@ def run(uid, revision, login, debug=False):
 
 
 def main(argv):
-    try:
-        opts, args = getopt.getopt(argv, "hiu:r:d", ["debug", "help", "install", "run",
-                                                     "uid=", "revision=", "login"])
-    except getopt.GetoptError as e:
-        return usage(2)
-    uid = None
-    revision = None
-    login = False
-    debug = False
-    for opt, arg in opts:
-        if opt in ('-u', '--uid'):
-            uid = int(arg)
-        elif opt in ('-r', '--revision'):
-            revision = arg
-        elif opt in ('--login'):
-            login = True
-        if opt in ('-d', '--debug'):
-            debug = True
-    for opt, arg in opts:
-        if opt in ('-h', '--help'):
-            return usage()
-        elif opt in ('-i', '--install'):
-            return install(debug=debug)
-        elif opt in ('-r', '--run'):
-            return run(uid=uid, revision=revision, login=login, debug=debug)
-    return usage(1)
+    import argparse
+
+    parser = argparse.ArgumentParser(description='osxmkhomedir')
+    #
+    parser.add_argument('-d', '--debug', help='enable debug output', action='store_true')
+    parser.add_argument('-i', '--install', help='install %(prog)s', action='store_true')
+    parser.add_argument('--update', help='update %(prog)s', action='store_true')
+    #
+    parser.add_argument('-u', '--uid', type=int)
+    parser.add_argument('-r', '--revision', type=int)
+    parser.add_argument('--run', help='run scripts (for debugging only)', action='store_true')
+    parser.add_argument('--login', help='login (use with extreme caution)', action='store_true')
+    #
+    args = parser.parse_args()
+
+    if args.update:
+        import pip
+        return pip.main(['install', '--upgrade', 'https://github.com/cluck/osxmkhomedir/archive/master.tar.gz'])
+
+    if args.install:
+        return install(debug=args.debug)
+
+    if args.run:
+        return run(uid=args.uid, revision=args.revision, login=args.login, debug=args.debug)
+
+    parser.print_usage()
+    return 1
 
 
 def login_hook():
