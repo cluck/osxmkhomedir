@@ -300,6 +300,13 @@ def run(uid, revision, login, debug=False):
     return script_errors
 
 
+#def test(pid, debug=False):
+#    cmd = ["/bin/launchctl", "bsexec", pid, "chroot", "-u", uid, "-g", gid, "/", "/bin/launchctl", "load", "-S", "Aqua", plist]
+#    child = subprocess.Popen(cmd, env=os.environ,
+#                    stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+#                print_communicate(child, verbose=debug)
+
+
 def main(argv):
     import argparse
 
@@ -310,9 +317,10 @@ def main(argv):
     parser.add_argument('--update', help='update %(prog)s', action='store_true')
     #
     parser.add_argument('-u', '--uid', type=int)
-    parser.add_argument('-r', '--revision', type=int)
+    parser.add_argument('-r', '--revision')  # Note: string, not int
     parser.add_argument('--run', help='run scripts (for debugging only)', action='store_true')
     parser.add_argument('--login', help='login (use with extreme caution)', action='store_true')
+    #parser.add_argument('--test', help='test (use with extreme caution)', action='store_true')
     #
     args = parser.parse_args()
 
@@ -323,9 +331,13 @@ def main(argv):
     if args.install:
         return install(debug=args.debug)
 
+    #if args.test:
+    #    return test(debug=args.debug)
+
     if args.run:
         return run(uid=args.uid, revision=args.revision, login=args.login, debug=args.debug)
 
+    print('osxmkhomedir {0}, Copyright (C) 2015, {1}'.format(__version__, __author__))
     parser.print_usage()
     return 1
 
