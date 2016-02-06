@@ -2,12 +2,13 @@
 
 from __future__ import unicode_literals
 
-__version__ = '3.5.0'
+__version__ = '3.7.0'
 __author__ = 'Claudio Luck'
 __author_email__ = 'claudio.luck@gmail.com'
 
 import sys
 import os
+import codecs
 import fcntl
 import getopt
 import glob
@@ -22,7 +23,8 @@ import logging.handlers
 
 cmd = os.path.abspath(sys.argv[0])
 base = os.path.basename(cmd)
-if base not in ('osxmkhomedir', 'osxmkhomedir-hook') and __name__ != "__main__":
+if base not in ('osxmkhomedir', 'osxmkhomedir-hook',
+        'osxmkhomedir-set-desktop') and __name__ != "__main__":
     raise RuntimeError('binary should be called osxmkhomedir, not ' + base)
 
 
@@ -91,38 +93,44 @@ def install(log):
     <key>Disabled</key>
     <false/>
     <key>Label</key>
-    <string>osxmkhomedir</string>
+    <string>{base:s}</string>
     <key>Program</key>
-    <string>{cmd:s}</string>
+    <string>/usr/local/Library/osxmkhomedir/agent.sh</string>
     <key>ProgramArguments</key>
     <array>
-        <string>--run</string>
+      <string>/usr/local/Library/osxmkhomedir/agent.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <false/>
     <key>StandardErrorPath</key>
-    <string>/var/log/{base:s}.err</string>
+    <string>/Users/Shared/osxmkhomedir/{base:s}.err</string>
     <key>StandardOutPath</key>
-    <string>/var/log/{base:s}.out</string>
+    <string>/Users/Shared/osxmkhomedir/{base:s}.out</string>
 </dict>
 </plist>
 """
-    plist_file = '/Library/LaunchAgents/{base:s}.plist'.format(base=base)
-    #with codecs.open(plist_file, 'w', 'utf-8') as plist:
-    #    plist.write(template.format(cmd=cmd, base=base))
-    #os.chmod(plist_file, 0644)
-    #os.chown(plist_file, 0, 0) 
-    #print('Written {0}'.format(plist_file))
-    #child = subprocess.Popen(['launchctl', 'unload', 'osxmkhomedir'],
-    #    stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    #child.communicate()
-    try:
-        os.unlink(plist_file)
-        log.info('Removed obsolete {0}'.format(plist_file))
-    except OSError:
-        pass
+    plist_file = '/Library/LaunchAgents/{base:s}.plist'.format(base='osxmkhomedir-agent')
+    with codecs.open(plist_file, 'w', 'utf-8') as plist:
+        plist.write(template.format(cmd=cmd, base='osxmkhomedir-agent'))
+    os.chmod(plist_file, 0644)
+    os.chown(plist_file, 0, 0)
+    if not os.path.isdir('/Users/Shared/osxmkhomedir'):
+        os.mkdir('/Users/Shared/osxmkhomedir', 0755)
+    with open('/Users/Shared/osxmkhomedir/osxmkhomedir-agent.out', 'a') as f:
+        os.chmod('/Users/Shared/osxmkhomedir/osxmkhomedir-agent.out', 0666)
+    with open('/Users/Shared/osxmkhomedir/osxmkhomedir-agent.err', 'a') as f:
+        os.chmod('/Users/Shared/osxmkhomedir/osxmkhomedir-agent.err', 0666)
+    print('Written {0}'.format(plist_file))
+    child = subprocess.Popen(['launchctl', 'load', plist_file],
+        stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+    log_communicate(child, log)
+    #try:
+    #   os.unlink(plist_file)
+    #   log.info('Removed obsolete {0}'.format(plist_file))
+    #except OSError:
+    #    pass
     child = subprocess.Popen(['defaults', 'write', 'com.apple.loginwindow',
         'LoginHook', '/usr/local/bin/osxmkhomedir-hook'],
         stderr=subprocess.PIPE, stdout=subprocess.PIPE)
@@ -413,12 +421,36 @@ def login_hook():
     except:
         print('Usage: osxmkhomedir-hook <username>')
         sys.exit(1)
-    login_script = '/usr/local/bin/osxmkhomedir'
+    login_script = '/usr/local/bin/osxmkhomedir'    
+    log_file = os.path.expanduser('~/Library/Logs/osxmkhomedir.log')
+    log = init_logging(log_file)
     #if check_secure(login_script, log):
     child = subprocess.Popen(['/usr/bin/sudo', '-n', '-u', user, login_script,
         '--run', '--no-root'], env={},
         stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     log_communicate(child, log)
+
+
+def set_desktop():
+	picture_path = sys.argv[1]
+	#
+	#import sqlite3
+	#db = sqlite3.connect(os.path.expanduser('~/Library/Application Support/Dock/desktoppicture.db'))
+	#db.execute('DELETE FROM data')
+	#db.execute('INSERT INTO data (value) VALUES (?)', (picture_path,))
+	#
+	from AppKit import NSWorkspace, NSScreen
+	from Foundation import NSURL
+	# generate a fileURL for the desktop picture
+	file_url = NSURL.fileURLWithPath_(picture_path)
+	# make image options dictionary
+	# we just make an empty one because the defaults are fine
+	options = {}
+	ws = NSWorkspace.sharedWorkspace()
+	for screen in NSScreen.screens():
+		(result, error) = ws.setDesktopImageURL_forScreen_options_error_(
+					file_url, screen, options, None
+				)
 
 
 def command():

@@ -58,11 +58,12 @@ setup(
     #include_package_data=True,
     platforms=["any"],
     #package_dir=PACKAGE_DIR,
-    requires=['argparse'],
+    requires=['argparse', 'AppKit'],
     entry_points={
         'console_scripts': [
             'osxmkhomedir = osxmkhomedir.commands:command',
             'osxmkhomedir-hook = osxmkhomedir.commands:login_hook',
+            'osxmkhomedir-set-desktop = osxmkhomedir.commands:set_desktop',
         ],
     },
     classifiers=[
