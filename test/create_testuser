@@ -1,0 +1,22 @@
+#!/bin/bash
+
+if [ -z "$1" ] ; then
+    TESTUSER=1
+    while [ -d /Users/testuser$TESTUSER ] ; do
+        let TESTUSER=$TESTUSER+1
+    done
+    TESTUSER=testuser$TESTUSER
+else
+    TESTUSER=${1}
+fi
+
+dscl . create /Users/$TESTUSER
+dscl . create /Users/$TESTUSER UserShell /bin/bash
+dscl . create /Users/$TESTUSER RealName $TESTUSER
+TESTUID=$(id -u $TESTUSER)
+[ -z "$TESTUID" ] || dscl . create /Users/$TESTUSER UniqueID $TESTUID
+dscl . create /Users/$TESTUSER PrimaryGroupID 20
+dscl . create /Users/$TESTUSER NFSHomeDirectory /Users/$TESTUSER
+dscl . passwd /Users/$TESTUSER testing
+# dscl . append /Groups/admin GroupMembership $TESTUSER
+
